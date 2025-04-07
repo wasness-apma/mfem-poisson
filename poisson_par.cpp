@@ -10,6 +10,12 @@ using namespace std;
 
 int main(int argc, char *argv[])
 {
+   Mpi::Init();
+   int num_procs = Mpi::WorldSize();
+   int myid = Mpi::WorldRank();
+   Hypre::Init();
+   MPI_Comm comm = MPI_COMM_WORLD;
+
    int order = 1;
    int ref_levels = 1;
    bool vis = false;
@@ -24,61 +30,64 @@ int main(int argc, char *argv[])
    args.Parse();
    if (!args.Good())
    {
-      args.PrintUsage(cout);
+      if (Mpi::Root()) { args.PrintUsage(cout); }
       return 1;
    }
-   args.PrintOptions(cout);
+   if (Mpi::Root()) { args.PrintOptions(cout); }
    MFEM_ASSERT(order >= 1, "Order must be at least 1.");
 
    // Initialize MFEM
-   Mesh mesh = mfem::Mesh::MakeCartesian2D(4, 4, Element::Type::TRIANGLE, true);
+   Mesh mesh = mfem::Mesh::MakeCartesian2D(8, 8, Element::Type::TRIANGLE, true);
+   ParMesh pmesh(comm, mesh);
+   mesh.Clear();
 
    // Define finite element space
-   H1_FECollection fec(order, mesh.Dimension());
-   FiniteElementSpace fes(&mesh, &fec);
+   H1_FECollection fec(order, pmesh.Dimension());
+   ParFiniteElementSpace fes(&pmesh, &fec);
 
-   Array<int> ess_bdr(mesh.bdr_attributes.Max());
+   Array<int> ess_bdr(pmesh.bdr_attributes.Max());
    ess_bdr = 0;
 
    for (int lv = 0; lv < ref_levels; lv++)
    {
-      mesh.UniformRefinement();
+      pmesh.UniformRefinement();
       fes.Update();
       const int dof = fes.GetVSize();
 
-      // Define Block offsets.
-      // The first block is the Poisson equation, and the second block is average zero condition
-      Array<int> offsets({0, dof, 1});
-      offsets.PartialSum();
-
-      GridFunction u(&fes);
+      ParGridFunction u(&fes);
       u = 0.0;
 
       // Define the linear form
-      LinearForm load(&fes);
+      ParLinearForm load(&fes);
       FunctionCoefficient load_cf([](const Vector &x) { return 2*M_PI*M_PI*cos(M_PI*x[0])*cos(M_PI*x[1]); });
       load.AddDomainIntegrator(new DomainLFIntegrator(load_cf));
       load.Assemble();
+      Vector b(fes.GetTrueVSize());
+      load.ParallelAssemble(b);
 
       // Define the bilinear forms
-      BilinearForm diffusion(&fes);
+      ParBilinearForm diffusion(&fes);
       diffusion.AddDomainIntegrator(new DiffusionIntegrator());
       diffusion.Assemble();
       diffusion.Finalize();
+      std::unique_ptr<HypreParMatrix> D(diffusion.ParallelAssemble());
 
-      LinearForm avg_zero(&fes);
+      ParLinearForm avg_zero(&fes);
       ConstantCoefficient one_cf(1.0);
       avg_zero.AddDomainIntegrator(new DomainLFIntegrator(one_cf));
 
-      MassZeroOperator mass_zero_op(diffusion, avg_zero, false);
+      MassZeroOperator mass_zero_op(*D, avg_zero, false);
 
-      CGSolver solver;
+      Vector &x = u.GetTrueVector();
+
+      CGSolver solver(comm);
       solver.SetOperator(mass_zero_op);
       solver.SetRelTol(1e-10);
       solver.SetAbsTol(1e-10);
       solver.SetMaxIter(1e06);
-      solver.SetPrintLevel(1);
-      solver.Mult(load, u);
+      solver.SetPrintLevel(0);
+      solver.Mult(b, x);
+      u.SetFromTrueVector();
 
       FunctionCoefficient exact_solution([](const Vector &x)
       {
@@ -91,11 +100,15 @@ int main(int argc, char *argv[])
       real_t mass_err = avg_zero(u);
 
       // Print the solution
-      std::cout << "Error : " << err << std::endl;
-      std::cout << "Avg   : " << mass_err << std::endl;
-      GLVis glvis("localhost", 19916, false);
+      if (Mpi::Root())
+      {
+         std::cout << "Error : " << err << std::endl;
+         std::cout << "Avg   : " << mass_err << std::endl;
+      }
+      GLVis glvis("localhost", 19916, true);
       glvis.Append(u, "u");
       glvis.Update();
    }
    return 0;
 }
+

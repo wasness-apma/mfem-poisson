@@ -16,17 +16,19 @@ include("${CMAKE_SOURCE_DIR}/config.cmake")
 include("${MFEM_DIR}/MFEMConfig.cmake")
 
 # Non-executable helper libraries
-add_library(linearop STATIC src/linearop.cpp)
-target_link_libraries(linearop PUBLIC mfem)
-
 add_library(helper STATIC src/helper.cpp)
 target_link_libraries(helper PUBLIC mfem)
 
+add_library(mass_zero STATIC src/mass_zero.cpp)
+target_link_libraries(mass_zero PUBLIC mfem)
+
 # Create executable
 add_executable(poisson poisson.cpp)
+add_executable(poisson_par poisson_par.cpp)
 
 # Link with MFEM
-target_link_libraries(poisson PRIVATE linearop helper mfem)
+target_link_libraries(poisson PRIVATE helper mass_zero mfem)
+target_link_libraries(poisson_par PRIVATE helper mass_zero mfem)
 
 add_custom_target(dataclean
   COMMAND ${CMAKE_COMMAND} -E echo "Cleaning up mesh and result files..."

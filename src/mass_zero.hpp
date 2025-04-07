@@ -17,6 +17,7 @@ private:
    bool isParallel = false;
 #ifdef MFEM_USE_MPI
    mutable Vector pmass_vec;
+   MPI_Comm comm;
 #endif
 protected:
 public:

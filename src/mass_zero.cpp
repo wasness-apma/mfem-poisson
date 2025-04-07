@@ -66,17 +66,16 @@ MassZeroOperator::MassZeroOperator(Operator &op, LinearForm &mass_op,
    if (p_mass_op)
    {
       isParallel = true;
+      comm = p_mass_op->ParFESpace()->GetComm();
       pmass_vec.SetSize(p_mass_op->ParFESpace()->GetTrueVSize());
-      if (reassemble) { p_mass_op->ParallelAssemble(pmass_vec); }
+      if (!reassemble) { p_mass_op->ParallelAssemble(pmass_vec); }
    }
 #endif
 }
 
 void MassZeroOperator::CorrectVolume(Vector &x) const
 {
-   Vector x_view;
-   x_view.SetDataAndSize(x.GetData() + offset, mass_op.FESpace()->GetTrueVSize());
-   if (reassemble)
+   if (reassemble) // reassemble if needed
    {
       mass_op.Assemble();
       if (isParallel)
@@ -86,10 +85,13 @@ void MassZeroOperator::CorrectVolume(Vector &x) const
 #endif
       }
    }
+
+   Vector x_view;
+   x_view.SetDataAndSize(x.GetData() + offset, mass_op.FESpace()->GetTrueVSize());
    if (isParallel)
    {
 #ifdef MFEM_USE_MPI
-      x_view -= pmass_vec*x_view;
+      x_view -= InnerProduct(comm, pmass_vec, x_view);
 #endif
    }
    else

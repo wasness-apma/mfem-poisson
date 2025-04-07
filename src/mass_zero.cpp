@@ -59,7 +59,7 @@ MassZeroOperator::MassZeroOperator(Operator &op, LinearForm &mass_op,
    , op(op), mass_op(mass_op)
    , reassemble(reassemble), offset(offset)
 {
-   if (reassemble) { mass_op.Assemble(); }
+   if (!reassemble) { mass_op.Assemble(); domain_size = mass_op.Sum();}
 
 #ifdef MFEM_USE_MPI
    ParLinearForm * p_mass_op = dynamic_cast<ParLinearForm*>(&mass_op);
@@ -68,7 +68,11 @@ MassZeroOperator::MassZeroOperator(Operator &op, LinearForm &mass_op,
       isParallel = true;
       comm = p_mass_op->ParFESpace()->GetComm();
       pmass_vec.SetSize(p_mass_op->ParFESpace()->GetTrueVSize());
-      if (!reassemble) { p_mass_op->ParallelAssemble(pmass_vec); }
+      if (!reassemble)
+      {
+         p_mass_op->ParallelAssemble(pmass_vec);
+         MPI_Allreduce(MPI_IN_PLACE, &domain_size, 1, MFEM_MPI_REAL_T, MPI_SUM, comm);
+      }
    }
 #endif
 }
@@ -78,25 +82,30 @@ void MassZeroOperator::CorrectVolume(Vector &x) const
    if (reassemble) // reassemble if needed
    {
       mass_op.Assemble();
+      domain_size = mass_op.Sum();
       if (isParallel)
       {
 #ifdef MFEM_USE_MPI
+         pmass_vec.SetSize(static_cast<ParLinearForm*>
+                           (&mass_op)->ParFESpace()->GetTrueVSize());
          static_cast<ParLinearForm*>(&mass_op)->ParallelAssemble(pmass_vec);
+         MPI_Allreduce(MPI_IN_PLACE, &domain_size, 1, MFEM_MPI_REAL_T, MPI_SUM, comm);
 #endif
       }
    }
 
-   Vector x_view;
-   x_view.SetDataAndSize(x.GetData() + offset, mass_op.FESpace()->GetTrueVSize());
+   Vector x_view(x, offset, mass_op.FESpace()->GetTrueVSize());
    if (isParallel)
    {
 #ifdef MFEM_USE_MPI
-      x_view -= InnerProduct(comm, pmass_vec, x_view);
+      const real_t curr_volume = InnerProduct(comm, pmass_vec, x_view);
+      x_view -= curr_volume / domain_size;
 #endif
    }
    else
    {
-      x_view -= mass_op*x_view;
+      const real_t curr_volume = mass_op*x_view;
+      x_view -= curr_volume / domain_size;
    }
 }
 

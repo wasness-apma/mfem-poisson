@@ -31,7 +31,7 @@ int main(int argc, char *argv[])
    MFEM_ASSERT(order >= 1, "Order must be at least 1.");
 
    // Initialize MFEM
-   Mesh mesh = mfem::Mesh::MakeCartesian2D(4, 4, Element::Type::TRIANGLE, true);
+   Mesh mesh = mfem::Mesh::MakeCartesian2D(8, 8, Element::Type::TRIANGLE, true);
 
    // Define finite element space
    H1_FECollection fec(order, mesh.Dimension());
@@ -69,15 +69,17 @@ int main(int argc, char *argv[])
       LinearForm avg_zero(&fes);
       ConstantCoefficient one_cf(1.0);
       avg_zero.AddDomainIntegrator(new DomainLFIntegrator(one_cf));
+      avg_zero.Assemble();
 
-      MassZeroOperator mass_zero_op(diffusion, avg_zero, false);
+      MassZeroOperator mass_zero_op(diffusion, avg_zero);
+      mass_zero_op.CorrectVolume(load);
 
       CGSolver solver;
       solver.SetOperator(mass_zero_op);
       solver.SetRelTol(1e-10);
       solver.SetAbsTol(1e-10);
       solver.SetMaxIter(1e06);
-      solver.SetPrintLevel(1);
+      solver.SetPrintLevel(0);
       solver.Mult(load, u);
 
       FunctionCoefficient exact_solution([](const Vector &x)

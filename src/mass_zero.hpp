@@ -1,3 +1,5 @@
+#ifndef MFEM_MASS_ZERO_HPP
+#define MFEM_MASS_ZERO_HPP
 #include "mfem.hpp"
 
 namespace mfem
@@ -15,6 +17,7 @@ private:
    bool reassemble = false;
    const int offset;
    bool isParallel = false;
+   mutable real_t domain_size;
 #ifdef MFEM_USE_MPI
    mutable Vector pmass_vec;
    MPI_Comm comm;
@@ -43,3 +46,4 @@ public:
    }
 };
 } // namespace mfem
+#endif // MFEM_MASS_ZERO_HPP

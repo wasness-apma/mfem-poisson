@@ -76,7 +76,8 @@ int main(int argc, char *argv[])
       ConstantCoefficient one_cf(1.0);
       avg_zero.AddDomainIntegrator(new DomainLFIntegrator(one_cf));
 
-      MassZeroOperator mass_zero_op(*D, avg_zero, false);
+      MassZeroOperator mass_zero_op(*D, avg_zero);
+      mass_zero_op.CorrectVolume(b);
 
       Vector &x = u.GetTrueVector();
 

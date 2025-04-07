@@ -74,6 +74,7 @@ MassZeroOperator::MassZeroOperator(Operator &op, LinearForm &mass_op,
 
 void MassZeroOperator::CorrectVolume(Vector &x) const
 {
+   Vector x_view(x.GetData() + offset, mass_op.FESpace()->GetTrueVSize());
    if (reassemble)
    {
       mass_op.Assemble();
@@ -81,12 +82,12 @@ void MassZeroOperator::CorrectVolume(Vector &x) const
       {
 #ifdef MFEM_USE_MPI
          static_cast<ParLinearForm*>(&mass_op)->ParallelAssemble(pmass_vec);
-         x -= pmass_vec*x;
+         x_view -= pmass_vec*x;
 #endif
       }
       else
       {
-         x -= mass_op*x;
+         x_view -= mass_op*x;
       }
    }
 }

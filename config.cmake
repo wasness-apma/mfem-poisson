@@ -1,0 +1,5 @@
+if(EXISTS "${CMAKE_SOURCE_DIR}/user.cmake")
+  include("${CMAKE_SOURCE_DIR}/user.cmake")
+else()
+  set(MFEM_DIR "${CMAKE_SOURCE_DIR}/../mfem/build") 
+endif()

@@ -16,7 +16,7 @@ real_t p_exact(const Vector &x);
 void f_exact(const Vector &x, Vector &f);
 
 void print_array(Array<int> arr);
-void multiplyOperator(Operator *op, int nrows, int ncols, BlockOperator*& blockOperator);
+// void multiplyOperator(Operator *op, int nrows, int ncols, BlockOperator*& blockOperator);
 
 int main(int argc, char *argv[])
 {
@@ -45,63 +45,98 @@ int main(int argc, char *argv[])
    int dim = mesh.Dimension();
 
    // Define finite element space. Need Dimension() + 1 to have a vector field u and pressure p
-   H1_FECollection fec(order, dim);  
-   FiniteElementSpace fes(&mesh, &fec);
+   // H1_FECollection fec(order, dim);  
+   // FiniteElementSpace fes(&mesh, &fec);
 
-   // 5. Define a finite element space on the mesh. Here we use the
-   //    Raviart-Thomas finite elements of the specified order.
-   FiniteElementCollection *hdiv_coll(new RT_FECollection(order, dim));
-   FiniteElementCollection *l2_coll(new L2_FECollection(order, dim));
+   // FiniteElementCollection *hdiv_coll(new RT_FECollection(order, dim)); // used for u, and test vectors
+   // FiniteElementCollection *h1_coll(new H1_FECollection(order, dim)); // used for p, and for test functions
 
-   FiniteElementSpace *R_space = new FiniteElementSpace(mesh, hdiv_coll);
-   FiniteElementSpace *W_space = new FiniteElementSpace(mesh, l2_coll);
+   // RT_FECollection rt_col(order, dim);  
+   H1_FECollection h1_coll(order, dim);
+
+   // FiniteElementSpace *R_space = new FiniteElementSpace(mesh, hdiv_coll);
+   // FiniteElementSpace R_space(&mesh, &h1_coll, dim);
+   FiniteElementSpace R_space(&mesh, &h1_coll, dim=dim);
+   FiniteElementSpace H_space(&mesh, &h1_coll);
 
    Array<int> ess_bdr(mesh.bdr_attributes.Max());
    ess_bdr = 0;
 
+   // Apply boundary conditions on all external boundaries:
+   Array<int> ess_tdof_list;
+   mesh.MarkExternalBoundaries(ess_bdr);
+   R_space.GetEssentialTrueDofs(ess_bdr, ess_tdof_list);
+
    for (int lv = 0; lv < ref_levels; lv++)
    {
       mesh.UniformRefinement();
-      fes.Update();
-      const int dof = fes.GetVSize();
+
+      R_space.Update();
+      const int dof_RT = R_space.GetVSize();
+
+      H_space.Update();
+      const int dof_H = H_space.GetVSize();
 
       // Define Block offsets.
       // The first block is the momentum equation, the second block is the continuity equation, and the third block is average zero condition
       Array<int> block_offsets(4);
       block_offsets[0] = 0;
-      block_offsets[1] = dim *  dof;
-      block_offsets[2] = dof;
+      block_offsets[1] = dof_RT;
+      block_offsets[2] = dof_H;
       block_offsets[3] = 1;
       block_offsets.PartialSum();
-      BlockVector x(block_offsets);
+      BlockVector x(block_offsets), rhs(block_offsets);
 
       std::cout << "***********************************************************\n";
-      std::cout << "FES dofs = " << dof << "\n";
+      std::cout << "RT Space dofs = " << dof_RT << "\n";
+      std::cout << "H1 Space dofs = " << dof_H << "\n";
       std::cout << "dim(Diffusion) = " << block_offsets[1] - block_offsets[0] << "\n";
       std::cout << "dim(Div) = " << block_offsets[2] - block_offsets[1] << "\n";
       std::cout << "dim(Zero) = " << block_offsets[3] - block_offsets[2] << "\n";
       std::cout << "***********************************************************\n\n";
 
-      Array<GridFunct
       GridFunction u, p;
-      u.MakeRef(&fes, x.GetBlock(0), 0);
-      p.MakeRef(&fes, x.GetBlock(1), 0);
+      u.MakeRef(&R_space, x.GetBlock(0), 0);
+      p.MakeRef(&H_space, x.GetBlock(1), 0);
 
       u = 0.0;
       p = 0.0;
 
       // Define the linear form
-      LinearForm load(&fes);
+      // LinearForm load(&fes);
+      // VectorFunctionCoefficient load_cf(dim, f_exact);
+      // load.AddDomainIntegrator(new VectorDomainLFIntegrator(load_cf));
+      // load.Assemble();
+
+      LinearForm load(&R_space);
       VectorFunctionCoefficient load_cf(dim, f_exact);
       load.AddDomainIntegrator(new VectorDomainLFIntegrator(load_cf));
       load.Assemble();
 
+      LinearForm zeroForm(&H_space);
+      zeroForm.Assemble();
+
+      BilinearForm diffusionOperator(&R_space);
+      diffusionOperator.AddDomainIntegrator(new VectorDiffusionIntegrator(dim));
+      diffusionOperator.Assemble();
+
+      MixedBilinearForm divergenceOperator(&R_space, &H_space);
+      divergenceOperator.AddDomainIntegrator(new VectorDivergenceIntegrator);
+      divergenceOperator.Assemble();
+
+      TransposeOperator transposeDivergenceOperator(&divergenceOperator);
+
+      BlockOperator stokesOperator(block_offsets);
+      stokesOperator.SetBlock(0,0, &diffusionOperator, mu);
+      stokesOperator.SetBlock(0,1, &transposeDivergenceOperator, -1.0);
+      stokesOperator.SetBlock(1,0, &divergenceOperator, 1.0);
+
       // ************************
       // Define the bilinear forms
-      BilinearForm diffusion(&fes);
-      diffusion.AddDomainIntegrator(new VectorDiffusionIntegrator(dim));
-      diffusion.Assemble();
-      diffusion.Finalize();
+      // BilinearForm diffusion(&fes);
+      // diffusion.AddDomainIntegrator(new VectorDiffusionIntegrator(dim));
+      // diffusion.Assemble();
+      // diffusion.Finalize();
 
       // Array<int> stackedDiffusionIntegrationOffsets(dim + 1);
       // stackedDiffusionIntegrationOffsets[0] = 0;
@@ -116,12 +151,13 @@ int main(int argc, char *argv[])
       //       stackedDiffusionIntegrator.SetBlock(d1, d2, &diffusion);
       //    }
       // }
-      BlockOperator* stackedDiffusionIntegrator;
-      multiplyOperator(&diffusion, dim, dim, stackedDiffusionIntegrator);
-      std::cout << "Created Diffusion Integrator.\n";
+      // BlockOperator* stackedDiffusionIntegrator;
+      // multiplyOperator(&diffusion, dim, dim, stackedDiffusionIntegrator);
+      // std::cout << "Created Diffusion Integrator.\n";
 
       // ************************
 
+      /*
       // ******************* 
       // Divergence Integrator
       BilinearForm div(&fes);
@@ -185,14 +221,15 @@ int main(int argc, char *argv[])
       std::cout << "Set block (1, 0).\n";
       stokesOp.SetBlock(0, 1, stackedTransposeDivIntegrator, -1.0);
       std::cout << "Set block (0, 1).\n";
+      */
 
 
-      LinearForm avg_zero(&fes);
+      LinearForm avg_zero(&H_space);
       ConstantCoefficient one_cf(1.0);
       avg_zero.AddDomainIntegrator(new DomainLFIntegrator(one_cf));
       avg_zero.Assemble();
 
-      MassZeroOperator mass_zero_op(stokesOp, avg_zero);
+      MassZeroOperator mass_zero_op(stokesOperator, avg_zero);
       mass_zero_op.CorrectVolume(load);
 
       CGSolver solver;
@@ -207,7 +244,7 @@ int main(int argc, char *argv[])
       FunctionCoefficient pcoeff(p_exact);
 
       real_t err = u.ComputeL2Error(ucoeff);
-      avg_zero.SetSize(dof);
+      avg_zero.SetSize(dof_H);
       avg_zero.Assemble();
       real_t mass_err = avg_zero(u);
 
@@ -231,31 +268,31 @@ void print_array(Array<int> arr) {
    }
 }
 
-void multiplyOperator(Operator *op, int nrows, int ncols, BlockOperator *&blockOperator) {
-      int oprows = op -> NumRows();
-      int opcols = op -> NumCols(); 
+// void multiplyOperator(Operator *op, int nrows, int ncols, BlockOperator *&blockOperator) {
+//       int oprows = op -> NumRows();
+//       int opcols = op -> NumCols(); 
 
-      Array<int> stackeColOffsets(ncols + 1);
-      stackeColOffsets[0] = 0;
-      for (int d = 0; d < ncols; d++) {
-         stackeColOffsets[1 + d] = opcols;
-      }
-      stackeColOffsets.PartialSum();
+//       Array<int> stackeColOffsets(ncols + 1);
+//       stackeColOffsets[0] = 0;
+//       for (int d = 0; d < ncols; d++) {
+//          stackeColOffsets[1 + d] = opcols;
+//       }
+//       stackeColOffsets.PartialSum();
 
-      Array<int> stackedRowOffsets(nrows + 1);
-      stackedRowOffsets[0] = 0;
-      for (int d = 0; d < nrows; d++) {
-         stackedRowOffsets[1 + d] = oprows;
-      }
-      stackedRowOffsets.PartialSum();
+//       Array<int> stackedRowOffsets(nrows + 1);
+//       stackedRowOffsets[0] = 0;
+//       for (int d = 0; d < nrows; d++) {
+//          stackedRowOffsets[1 + d] = oprows;
+//       }
+//       stackedRowOffsets.PartialSum();
 
-      blockOperator = new BlockOperator(stackedRowOffsets, stackeColOffsets);
-      for (int dr = 0; dr < nrows; dr++) {
-         for (int dc = 0; dc < ncols; dc++) {
-            blockOperator -> SetBlock(dr, dc, op);
-         }
-      }
-}
+//       blockOperator = new BlockOperator(stackedRowOffsets, stackeColOffsets);
+//       for (int dr = 0; dr < nrows; dr++) {
+//          for (int dc = 0; dc < ncols; dc++) {
+//             blockOperator -> SetBlock(dr, dc, op);
+//          }
+//       }
+// }
 
 void u_exact(const Vector &x, Vector &u)
 {

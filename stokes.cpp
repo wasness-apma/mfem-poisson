@@ -85,6 +85,8 @@ int main(int argc, char *argv[])
       block_offsets[2] = dof_H;
       block_offsets[3] = 1;
       block_offsets.PartialSum();
+
+      // true solution vector
       BlockVector x(block_offsets), rhs(block_offsets);
 
       std::cout << "***********************************************************\n";
@@ -95,23 +97,22 @@ int main(int argc, char *argv[])
       std::cout << "dim(Zero) = " << block_offsets[3] - block_offsets[2] << "\n";
       std::cout << "***********************************************************\n\n";
 
-      GridFunction u, p;
-      u.MakeRef(&R_space, x.GetBlock(0), 0);
-      p.MakeRef(&H_space, x.GetBlock(1), 0);
+      // GridFunction u, p;
+      // u.MakeRef(&R_space, x.GetBlock(0), 0);
+      // p.MakeRef(&H_space, x.GetBlock(1), 0);
 
-      u = 0.0;
-      p = 0.0;
+      // u = 0.0;
+      // p = 0.0;
 
-      // Define the linear form
-      // LinearForm load(&fes);
-      // VectorFunctionCoefficient load_cf(dim, f_exact);
-      // load.AddDomainIntegrator(new VectorDomainLFIntegrator(load_cf));
-      // load.Assemble();
+      GridFunction u_g(&R_space);
+      u_g = 0.0;
+      VectorFunctionCoefficient bdrConditions(dim=2, &u_exact);
+      u_g.ProjectBdrCoefficient(bdrConditions, ess_bdr);
 
-      LinearForm load(&R_space);
-      VectorFunctionCoefficient load_cf(dim, f_exact);
-      load.AddDomainIntegrator(new VectorDomainLFIntegrator(load_cf));
-      load.Assemble();
+      GridFunction constant_zero(&H_space);
+      constant_zero = 0.0;
+
+      // Define the bilinear form, without boundary conditions
 
       LinearForm zeroForm(&H_space);
       zeroForm.Assemble();
@@ -130,6 +131,22 @@ int main(int argc, char *argv[])
       stokesOperator.SetBlock(0,0, &diffusionOperator, mu);
       stokesOperator.SetBlock(0,1, &transposeDivergenceOperator, -1.0);
       stokesOperator.SetBlock(1,0, &divergenceOperator, 1.0);
+
+      // define the linear form, with boundary conditions
+
+      LinearForm load(&R_space);
+      VectorFunctionCoefficient load_cf(dim, f_exact);
+      load.AddDomainIntegrator(new VectorDomainLFIntegrator(load_cf));
+      load.Assemble();
+
+
+      // fix boundary on stokes operator
+      // stokesOperator.
+
+
+      // solve for boundary later
+      // LinearForm boundary(&R_space);
+      // VectorFunctionCoefficient
 
       // ************************
       // Define the bilinear forms
@@ -238,7 +255,12 @@ int main(int argc, char *argv[])
       solver.SetAbsTol(1e-10);
       solver.SetMaxIter(1e06);
       solver.SetPrintLevel(0);
-      solver.Mult(load, u);
+      solver.Mult(load, x);
+
+      // 12. Create the grid functions u and p. Compute the L2 error norms.
+      GridFunction u, p;
+      u.MakeRef(&R_space, x.GetBlock(0), 0);
+      p.MakeRef(&H_space, x.GetBlock(1), 0);
 
       VectorFunctionCoefficient ucoeff(dim, u_exact);
       FunctionCoefficient pcoeff(p_exact);

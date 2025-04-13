@@ -253,6 +253,7 @@ int main(int argc, char *argv[])
       std::cout << "Avg   : " << mass_err << std::endl;
       GLVis glvis("localhost", 19916, false);
       glvis.Append(u, "u");
+      glvis.Append(p, "p");
       glvis.Update();
    }
    return 0;

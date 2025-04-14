@@ -15,7 +15,7 @@ SparseMatrix ToRowMatrix(LinearForm &lf)
    int *i, *j;
    row_ptr.StealData(&i);
    col_ind.StealData(&j);
-   return SparseMatrix(i, j, data, size, 1, true, false, true);
+   return SparseMatrix(i, j, data, 1, size, true, false, true);
 }
 
 HypreParMatrix *ToRowParMatrix(ParLinearForm &lf)

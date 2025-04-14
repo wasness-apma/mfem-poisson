@@ -9,18 +9,21 @@
 using namespace mfem;
 using namespace std;
 
-real_t kappa = 4.0 * M_PI; // should be an integer multiple of pi so that p is zero sum.
-real_t mu = 3.0;
+const real_t pi = M_PI;
+
+real_t kappa = 3.0 * M_PI; // should be an integer multiple of pi so that p is zero sum.
+real_t mu = 1.0;
 void u_exact(const Vector &x, Vector & u);
 real_t p_exact(const Vector &x);
 void f_exact(const Vector &x, Vector &f);
 
 void print_array(Array<int> arr);
+void print_array(Array<float> arr);
 // void multiplyOperator(Operator *op, int nrows, int ncols, BlockOperator*& blockOperator);
 
 int main(int argc, char *argv[])
 {
-   int order = 1;
+   int order = 3;
    int ref_levels = 1;
    bool vis = false;
 
@@ -53,230 +56,175 @@ int main(int argc, char *argv[])
 
    // RT_FECollection rt_col(order, dim);  
    H1_FECollection h1_coll(order, dim);
+   H1_FECollection h1_coll_op1(order + 1, dim);
 
-   // FiniteElementSpace *R_space = new FiniteElementSpace(mesh, hdiv_coll);
-   // FiniteElementSpace R_space(&mesh, &h1_coll, dim);
-   FiniteElementSpace R_space(&mesh, &h1_coll, dim=dim);
-   FiniteElementSpace H_space(&mesh, &h1_coll);
+   // FiniteElementSpace *velocity_space = new FiniteElementSpace(mesh, hdiv_coll);
+   // FiniteElementSpace velocity_space(&mesh, &h1_coll, dim);
+   FiniteElementSpace velocity_space(&mesh, &h1_coll_op1, dim=dim); // velocity space
+   FiniteElementSpace velocity_component_space(&mesh, &h1_coll_op1); // velocity space
+   FiniteElementSpace pressure_space(&mesh, &h1_coll); // pressure space
 
    Array<int> ess_bdr(mesh.bdr_attributes.Max());
-   ess_bdr = 0;
-
-   // Apply boundary conditions on all external boundaries:
-   Array<int> ess_tdof_list;
-   mesh.MarkExternalBoundaries(ess_bdr);
-   R_space.GetEssentialTrueDofs(ess_bdr, ess_tdof_list);
+   ess_bdr = 1;
 
    for (int lv = 0; lv < ref_levels; lv++)
    {
       mesh.UniformRefinement();
 
-      R_space.Update();
-      const int dof_RT = R_space.GetVSize();
+      velocity_space.Update();
+      velocity_component_space.Update();
+      pressure_space.Update();
 
-      H_space.Update();
-      const int dof_H = H_space.GetVSize();
+      const int dof_velocity = velocity_space.GetVSize();
+      const int dof_pressure = pressure_space.GetVSize();
+
+      // Apply boundary conditions on all external boundaries:
+      Array<int> ess_tdof_list;
+      velocity_space.GetEssentialTrueDofs(ess_bdr, ess_tdof_list);
+
 
       // Define Block offsets.
       // The first block is the momentum equation, the second block is the continuity equation, and the third block is average zero condition
       Array<int> block_offsets(4);
       block_offsets[0] = 0;
-      block_offsets[1] = dof_RT;
-      block_offsets[2] = dof_H;
+      block_offsets[1] = dof_velocity;
+      block_offsets[2] = dof_pressure;
       block_offsets[3] = 1;
       block_offsets.PartialSum();
 
-      // true solution vector
+      // true solution vector. The mt part is a copy past.
+      // MemoryType mt = device.GetMemoryType();
       BlockVector x(block_offsets), rhs(block_offsets);
+      x = 0.0;
+      rhs = 0.0;
 
       std::cout << "***********************************************************\n";
-      std::cout << "RT Space dofs = " << dof_RT << "\n";
-      std::cout << "H1 Space dofs = " << dof_H << "\n";
+      std::cout << "RT Space dofs = " << dof_velocity << "\n";
+      std::cout << "H1 Space dofs = " << dof_pressure << "\n";
       std::cout << "dim(Diffusion) = " << block_offsets[1] - block_offsets[0] << "\n";
       std::cout << "dim(Div) = " << block_offsets[2] - block_offsets[1] << "\n";
       std::cout << "dim(Zero) = " << block_offsets[3] - block_offsets[2] << "\n";
       std::cout << "***********************************************************\n\n";
 
       // GridFunction u, p;
-      // u.MakeRef(&R_space, x.GetBlock(0), 0);
-      // p.MakeRef(&H_space, x.GetBlock(1), 0);
+      // u.MakeRef(&velocity_space, x.GetBlock(0), 0);
+      // p.MakeRef(&pressure_space, x.GetBlock(1), 0);
 
       // u = 0.0;
       // p = 0.0;
 
-      GridFunction u_g(&R_space);
-      u_g = 0.0;
-      VectorFunctionCoefficient bdrConditions(dim=2, &u_exact);
-      u_g.ProjectBdrCoefficient(bdrConditions, ess_bdr);
 
-      GridFunction constant_zero(&H_space);
-      constant_zero = 0.0;
+      // std::cout << "no segfault yet\n";
 
-      // Define the bilinear form, without boundary conditions
+      GridFunction u(&velocity_space, x.GetBlock(0));
+      VectorFunctionCoefficient bdrConditions(dim=dim, &u_exact);
+      // Vector one_vec({1.0, 1.0});
+      // VectorConstantCoefficient bdrConditions(one_vec);
+      u.ProjectBdrCoefficient(bdrConditions, ess_bdr);
 
-      LinearForm zeroForm(&H_space);
-      zeroForm.Assemble();
+      GridFunction ux(&velocity_component_space, x.GetBlock(0));
+      GridFunction uy(&velocity_component_space, x.GetBlock(0), velocity_component_space.GetVSize());
+      
 
-      BilinearForm diffusionOperator(&R_space);
-      diffusionOperator.AddDomainIntegrator(new VectorDiffusionIntegrator(dim));
-      diffusionOperator.Assemble();
+      GridFunction p(&pressure_space, x.GetBlock(1));
 
-      MixedBilinearForm divergenceOperator(&R_space, &H_space);
-      divergenceOperator.AddDomainIntegrator(new VectorDivergenceIntegrator);
-      divergenceOperator.Assemble();
+      // define the linear form, witout boundary conditions
 
-      TransposeOperator transposeDivergenceOperator(&divergenceOperator);
-
-      BlockOperator stokesOperator(block_offsets);
-      stokesOperator.SetBlock(0,0, &diffusionOperator, mu);
-      stokesOperator.SetBlock(0,1, &transposeDivergenceOperator, -1.0);
-      stokesOperator.SetBlock(1,0, &divergenceOperator, 1.0);
-
-      // define the linear form, with boundary conditions
-
-      LinearForm load(&R_space);
+      LinearForm load(&velocity_space, rhs.GetBlock(0).GetData());
+      //fform->Update(R_space, rhs.GetBlock(0), 0);
       VectorFunctionCoefficient load_cf(dim, f_exact);
       load.AddDomainIntegrator(new VectorDomainLFIntegrator(load_cf));
       load.Assemble();
 
+      // LinearForm zeroForm(&pressure_space, rhs.GetBlock(1).GetData());
+      // zeroForm.Assemble();
 
-      // fix boundary on stokes operator
-      // stokesOperator.
+      // std::cout << "no segfault yet\n";
 
+      // Define the bilinear form, without boundary conditions
+      BilinearForm diffusionOperator(&velocity_space);
+      diffusionOperator.AddDomainIntegrator(new VectorDiffusionIntegrator());
+      diffusionOperator.Assemble();
+      diffusionOperator.EliminateEssentialBC(ess_bdr, u, rhs.GetBlock(0));
+      diffusionOperator.Finalize();
 
-      // solve for boundary later
-      // LinearForm boundary(&R_space);
-      // VectorFunctionCoefficient
-
-      // ************************
-      // Define the bilinear forms
-      // BilinearForm diffusion(&fes);
-      // diffusion.AddDomainIntegrator(new VectorDiffusionIntegrator(dim));
-      // diffusion.Assemble();
-      // diffusion.Finalize();
-
-      // Array<int> stackedDiffusionIntegrationOffsets(dim + 1);
-      // stackedDiffusionIntegrationOffsets[0] = 0;
-      // for (int d = 0; d < dim; d++) {
-      //    stackedDiffusionIntegrationOffsets[1 + d] = dof;
-      // }
-      // stackedDiffusionIntegrationOffsets.PartialSum();
+      // SparseMatrix diffusion_assembled;
       
-      // BlockOperator stackedDiffusionIntegrator(stackedDiffusionIntegrationOffsets);
-      // for (int d1 = 0; d1 < dim; d1++) {
-      //    for (int d2 = 0; d2 < dim; d2++){
-      //       stackedDiffusionIntegrator.SetBlock(d1, d2, &diffusion);
-      //    }
-      // }
-      // BlockOperator* stackedDiffusionIntegrator;
-      // multiplyOperator(&diffusion, dim, dim, stackedDiffusionIntegrator);
-      // std::cout << "Created Diffusion Integrator.\n";
+      // diffusionOperator.FormSystemMatrix(ess_tdof_list, diffusion_assembled);
 
-      // ************************
+      MixedBilinearForm divergenceOperator(&velocity_space, &pressure_space);
+      divergenceOperator.AddDomainIntegrator(new VectorDivergenceIntegrator);
+      divergenceOperator.Assemble();
+      divergenceOperator.EliminateTrialEssentialBC(ess_bdr, u, rhs.GetBlock(1));
+      divergenceOperator.Finalize();
 
-      /*
-      // ******************* 
-      // Divergence Integrator
-      BilinearForm div(&fes);
-      div.AddDomainIntegrator(new VectorFEDivergenceIntegrator());
-      div.Assemble();
-      div.Finalize();
+      // std::cout << "no segfault yet\n";
 
-      // Array<int> stackedDivColumnIntegrationOffsets(dim + 1);
-      // stackedDivColumnIntegrationOffsets[0] = 0;
-      // for (int d = 0; d < dim; d++) {
-      //    stackedDivColumnIntegrationOffsets[1 + d] = dof;
-      // }
-      // stackedDivColumnIntegrationOffsets.PartialSum();
-      
+      SparseMatrix * transposeDivergenceOperator = Transpose(divergenceOperator.SpMat());
 
-      // Array<int> stackedDivRowIntegrationOffsets(2);
-      // stackedDivRowIntegrationOffsets[0] = 0;
-      // stackedDivRowIntegrationOffsets[1] = dof;
-      // stackedDivRowIntegrationOffsets.PartialSum();
-
-      // BlockOperator stackedDivIntegrator(stackedDivRowIntegrationOffsets, stackedDivColumnIntegrationOffsets);
-      // for (int d = 0; d < dim; d++) {
-      //    stackedDivIntegrator.SetBlock(0, d, &div);
-      // }
-      BlockOperator* stackedDivIntegrator;
-      multiplyOperator(&div, 1, 2, stackedDivIntegrator);
-      std::cout << "Created Div Integrator.\n";
-
-      TransposeOperator transposeDivIntegrator = new TransposeOperator(div);
-      BlockOperator* stackedTransposeDivIntegrator;
-      multiplyOperator(&transposeDivIntegrator, 2, 1, stackedTransposeDivIntegrator);
-      std::cout << "Created Transpose Div Integrator.\n";
-      // ***************
-
-      BlockOperator stokesOp(block_offsets);
-
-      std::cout << "***********************************************************\n";
-      std::cout << "Diffusion Row Offsets: ";
-      print_array(stackedDiffusionIntegrator -> RowOffsets());
-      std::cout << "\n";
-
-      std::cout << "Diffusion Column Offsets: ";
-      print_array(stackedDiffusionIntegrator -> ColOffsets());
-      std::cout << "\n\n";
-
-      std::cout << "Div Row Offsets: ";
-      print_array(stackedDivIntegrator -> RowOffsets());
-      std::cout << "\n\n";
-
-      std::cout << "Div Column Offsets: ";
-      print_array(stackedDivIntegrator -> ColOffsets());
-      std::cout << "\n\n";
-
-      std::cout << "dim(Load Vector) = " << load.Size() << "\n";
-      std::cout << "***********************************************************\n";
-
-      std::cout << "Setting blocks.\n";
-      stokesOp.SetBlock(0, 0, stackedDiffusionIntegrator, mu);
-      std::cout << "Set block (0, 0).\n";
-      stokesOp.SetBlock(1, 0, stackedDivIntegrator, -1.0);
-      std::cout << "Set block (1, 0).\n";
-      stokesOp.SetBlock(0, 1, stackedTransposeDivIntegrator, -1.0);
-      std::cout << "Set block (0, 1).\n";
-      */
-
-
-      LinearForm avg_zero(&H_space);
+      LinearForm avg_zero(&pressure_space);
       ConstantCoefficient one_cf(1.0);
       avg_zero.AddDomainIntegrator(new DomainLFIntegrator(one_cf));
       avg_zero.Assemble();
+      // avg_zero.Fializ
 
-      MassZeroOperator mass_zero_op(stokesOperator, avg_zero);
-      mass_zero_op.CorrectVolume(load);
+      std::cout << "no segfault yet\n";
 
-      CGSolver solver;
-      solver.SetOperator(mass_zero_op);
+      SparseMatrix linearFormZero = ToRowMatrix(avg_zero);
+      // std::unique_ptr<SparseMatrix> linearFormZeroTranspose(Transpose(linearFormZero)); // unique_ptr basically manages ownership of pointer for me
+      SparseMatrix* linearFormZeroTranspose; 
+      linearFormZeroTranspose = Transpose(linearFormZero);
+
+      std::cout << "no segfault yet\n";
+
+      BlockOperator stokesOperator(block_offsets);
+      stokesOperator.SetBlock(0,0, &diffusionOperator.SpMat(), mu);
+      stokesOperator.SetBlock(0,1, transposeDivergenceOperator, 1.0);
+      stokesOperator.SetBlock(1,0, &divergenceOperator.SpMat(), 1.0);
+      stokesOperator.SetBlock(1,2, linearFormZeroTranspose, 1.0);
+      stokesOperator.SetBlock(2,1, &linearFormZero, 1.0);
+
+      // std::cout << "no segfault yet\n";
+
+      // instead of mass zero operator, convert average zero into sparse matrix
+      // MassZeroOperator mass_zero_op(stokesOperator, avg_zero);
+      // mass_zero_op.CorrectVolume(load);
+
+      GMRESSolver solver;
+      solver.SetOperator(stokesOperator);
       solver.SetRelTol(1e-10);
       solver.SetAbsTol(1e-10);
       solver.SetMaxIter(1e06);
-      solver.SetPrintLevel(0);
-      solver.Mult(load, x);
+      solver.SetKDim(1000);
+      solver.SetPrintLevel(1);
+      solver.Mult(rhs, x);
 
       // 12. Create the grid functions u and p. Compute the L2 error norms.
-      GridFunction u, p;
-      u.MakeRef(&R_space, x.GetBlock(0), 0);
-      p.MakeRef(&H_space, x.GetBlock(1), 0);
+      // GridFunction u, p;
+      // u.MakeRef(&velocity_space, x.GetBlock(0), 0);
+      // p.MakeRef(&pressure_space, x.GetBlock(1), 0);
 
       VectorFunctionCoefficient ucoeff(dim, u_exact);
       FunctionCoefficient pcoeff(p_exact);
 
       real_t err = u.ComputeL2Error(ucoeff);
-      avg_zero.SetSize(dof_H);
+      // u.ProjectCoefficient(ucoeff);
+      avg_zero.SetSize(dof_pressure);
       avg_zero.Assemble();
-      real_t mass_err = avg_zero(u);
+      real_t mass_err = avg_zero(p);
 
       // Print the solution
       std::cout << "Error : " << err << std::endl;
       std::cout << "Avg   : " << mass_err << std::endl;
       GLVis glvis("localhost", 19916, false);
       glvis.Append(u, "u");
+      glvis.Append(ux, "ux");
+      glvis.Append(uy, "uy");
       glvis.Append(p, "p");
       glvis.Update();
+
+      delete linearFormZeroTranspose;
+      delete transposeDivergenceOperator;
    }
    return 0;
 }
@@ -290,6 +238,17 @@ void print_array(Array<int> arr) {
          std::cout << arr[i];
    }
 }
+
+void print_array(Array<float> arr) {
+   int len = sizeof(arr) / sizeof(*arr);
+   for (int i = 0; i < len; i++) {
+      if (i < len - 1)
+         std::cout << arr[i] << " ";
+      else
+         std::cout << arr[i];
+   }
+}
+
 
 // void multiplyOperator(Operator *op, int nrows, int ncols, BlockOperator *&blockOperator) {
 //       int oprows = op -> NumRows();
@@ -322,17 +281,31 @@ void u_exact(const Vector &x, Vector &u)
    // note divergence free
    u(0) = sin(kappa * x(1));
    u(1) = sin(kappa * x(0));
+   // u(0) = 1;
+   // u(1) = 1;
 }
 
 real_t p_exact(const Vector &x)
 {
    return cos(kappa * x(0))*cos(kappa * x(1));
+   // return 0;
 }
 
 void f_exact(const Vector &x, Vector &f)
 {
    f(0) = -mu * (-kappa * kappa * sin(kappa * x(1))) - kappa * sin(kappa * x(0)) * cos(kappa * x(1));
    f(1) = -mu * (-kappa * kappa * sin(kappa * x(0))) - kappa * cos(kappa * x(0)) * sin(kappa * x(1));
+   // f(0) = 0;
+   // f(1) = 0;
+   // const real_t x = xvec(0);
+   // const real_t y = xvec(1);
+
+   // f(0) = 2*pi*sin(2*pi*y)*(2*pow(pi,2)*pow(x,4) - 4*pow(pi,
+   //                                2)*pow(x,3) + 2*pow(pi,2)*pow(x,2) - 6*pow(x,2) + 6*x - 1)
+   //              - cos(x)*cos(y);
+   // f(1) = sin(x)*sin(y) - 2*(2*x - 1)*(2*pow(pi,2)*cos(2*y*pi)*x - 2*pow(pi,
+   //                                           2)*cos(2*y*pi)*pow(x,2) + 3*cos(2*y*pi) - 3);
+
 }
 
 

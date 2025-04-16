@@ -143,7 +143,8 @@ int main(int argc, char *argv[])
 
       // Define the bilinear form, without boundary conditions
       BilinearForm diffusionOperator(&velocity_space);
-      diffusionOperator.AddDomainIntegrator(new VectorDiffusionIntegrator());
+      ConstantCoefficient mu_coeff(mu);
+      diffusionOperator.AddDomainIntegrator(new VectorDiffusionIntegrator(mu_coeff));
       diffusionOperator.Assemble();
       diffusionOperator.EliminateEssentialBC(ess_bdr, u, rhs.GetBlock(0));
       diffusionOperator.Finalize();
@@ -177,12 +178,21 @@ int main(int argc, char *argv[])
 
       std::cout << "no segfault yet\n";
 
-      BlockOperator stokesOperator(block_offsets);
-      stokesOperator.SetBlock(0,0, &diffusionOperator.SpMat(), mu);
-      stokesOperator.SetBlock(0,1, transposeDivergenceOperator, 1.0);
-      stokesOperator.SetBlock(1,0, &divergenceOperator.SpMat(), 1.0);
-      stokesOperator.SetBlock(1,2, linearFormZeroTranspose, 1.0);
-      stokesOperator.SetBlock(2,1, &linearFormZero, 1.0);
+      // BlockOperator stokesOperator(block_offsets);
+      // stokesOperator.SetBlock(0,0, &diffusionOperator.SpMat(), mu);
+      // stokesOperator.SetBlock(0,1, transposeDivergenceOperator, 1.0);
+      // stokesOperator.SetBlock(1,0, &divergenceOperator.SpMat(), 1.0);
+      // stokesOperator.SetBlock(1,2, linearFormZeroTranspose, 1.0);
+      // stokesOperator.SetBlock(2,1, &linearFormZero, 1.0);
+
+      BlockMatrix stokesOperator(block_offsets);
+      stokesOperator.SetBlock(0,0, &diffusionOperator.SpMat());
+      stokesOperator.SetBlock(0,1, transposeDivergenceOperator);
+      stokesOperator.SetBlock(1,0, &divergenceOperator.SpMat());
+      stokesOperator.SetBlock(1,2, linearFormZeroTranspose);
+      stokesOperator.SetBlock(2,1, &linearFormZero);
+
+      SparseMatrix * stokesMatrix = stokesOperator.CreateMonolithic();
 
       // std::cout << "no segfault yet\n";
 
@@ -190,16 +200,21 @@ int main(int argc, char *argv[])
       // MassZeroOperator mass_zero_op(stokesOperator, avg_zero);
       // mass_zero_op.CorrectVolume(load);
 
-      GMRESSolver solver;
-      solver.SetOperator(stokesOperator);
-      solver.SetRelTol(1e-10);
-      solver.SetAbsTol(1e-10);
-      solver.SetMaxIter(1e06);
-      solver.SetKDim(1000);
-      solver.SetPrintLevel(1);
-      solver.Mult(rhs, x);
+      // GMRESSolver solver;
+      // solver.SetOperator(stokesOperator);
+      // solver.SetRelTol(1e-10);
+      // solver.SetAbsTol(1e-10);
+      // solver.SetMaxIter(1e06);
+      // solver.SetKDim(1000);
+      // solver.SetPrintLevel(1);
+      // solver.Mult(rhs, x);
 
-      // 12. Create the grid functions u and p. Compute the L2 error norms.
+      UMFPackSolver umf_solver;
+      umf_solver.Control[UMFPACK_ORDERING] = UMFPACK_ORDERING_METIS;
+      umf_solver.SetOperator(*stokesMatrix);
+      umf_solver.Mult(rhs, x);
+
+         // 12. Create the grid functions u and p. Compute the L2 error norms.
       // GridFunction u, p;
       // u.MakeRef(&velocity_space, x.GetBlock(0), 0);
       // p.MakeRef(&pressure_space, x.GetBlock(1), 0);
@@ -223,6 +238,7 @@ int main(int argc, char *argv[])
       glvis.Append(p, "p");
       glvis.Update();
 
+      delete stokesMatrix;
       delete linearFormZeroTranspose;
       delete transposeDivergenceOperator;
    }

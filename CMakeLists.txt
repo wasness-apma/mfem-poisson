@@ -27,12 +27,14 @@ add_executable(poisson poisson.cpp)
 add_executable(poisson_par poisson_par.cpp)
 add_executable(stokes stokes.cpp)
 add_executable(stokes_with_density stokes_with_density.cpp)
+add_executable(stokes_to stokes_to.cpp)
 
 # Link with MFEM
 target_link_libraries(poisson PRIVATE helper mass_zero mfem)
 target_link_libraries(poisson_par PRIVATE helper mass_zero mfem)
 target_link_libraries(stokes PRIVATE helper mass_zero mfem)
 target_link_libraries(stokes_with_density PRIVATE helper mass_zero mfem)
+target_link_libraries(stokes_to PRIVATE helper mass_zero mfem)
 
 add_custom_target(dataclean
   COMMAND ${CMAKE_COMMAND} -E echo "Cleaning up mesh and result files..."
